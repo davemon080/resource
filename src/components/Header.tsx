@@ -31,8 +31,8 @@ export default function Header() {
           className="flex items-center gap-1.5 cursor-pointer"
           onClick={() => navigate('/')}
         >
-          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center text-white font-bold text-lg leading-none">
-            N
+          <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center">
+            <img src="https://iili.io/Bp0LZ3Q.jpg" alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           </div>
           <span className="font-bold text-zinc-900 tracking-tight">Nexlify Innovation</span>
         </motion.div>

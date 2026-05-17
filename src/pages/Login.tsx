@@ -63,8 +63,8 @@ export default function Login() {
         <Card className="shadow-xl border-zinc-200 overflow-hidden">
           <CardHeader className="space-y-1 text-center bg-zinc-900 text-white py-8">
             <div className="flex justify-center mb-4">
-              <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-lg transform -rotate-3 text-zinc-900">
-                <span className="font-bold text-3xl">N</span>
+              <div className="w-20 h-20 bg-white rounded-2xl overflow-hidden flex items-center justify-center shadow-lg transform -rotate-3 p-1">
+                <img src="https://iili.io/Bp0LZ3Q.jpg" alt="Logo" className="w-full h-full object-cover rounded-xl" referrerPolicy="no-referrer" />
               </div>
             </div>
             <CardTitle className="text-2xl font-bold tracking-tight">Nexlify Student Portal</CardTitle>

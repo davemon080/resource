@@ -19,11 +19,25 @@ export default function VideoDetails() {
   const { moduleId } = useParams();
   const navigate = useNavigate();
   const { progress, modules, loading, updateProgress } = useUserProgress();
+  
   const [videoFinished, setVideoFinished] = useState(false);
-  const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
+  const [lastModuleId, setLastModuleId] = useState(moduleId);
+  const [videoSrc, setVideoSrc] = useState<string | undefined>(undefined);
+
+  // Reset state immediately on module change during render to prevent state leak/playing old module
+  if (moduleId !== lastModuleId) {
+    setLastModuleId(moduleId);
+    setHasStarted(false);
+    setIsVideoLoading(false);
+    setVideoError(null);
+    setVideoFinished(false);
+    setVideoSrc(undefined);
+  }
 
   const currentModuleIndex = modules.findIndex(m => m.id === moduleId);
   const currentModule = modules[currentModuleIndex];
@@ -33,7 +47,7 @@ export default function VideoDetails() {
 
   useEffect(() => {
     setVideoFinished(false);
-    setIsVideoLoading(false); // Default to false until we know we have a source
+    setIsVideoLoading(false);
     setVideoError(null);
     setHasStarted(false);
   }, [moduleId]);
@@ -51,7 +65,6 @@ export default function VideoDetails() {
     };
   }, []);
 
-  const [videoSrc, setVideoSrc] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (currentModule?.type === ModuleType.VIDEO) {
@@ -172,7 +185,7 @@ export default function VideoDetails() {
                     controls
                     width="100%"
                     height="100%"
-                    playing={hasStarted}
+                    playing={hasStarted && !!videoSrc}
                     onReady={() => {
                       if (hasStarted) setIsVideoLoading(false);
                     }}
