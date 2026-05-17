@@ -31,6 +31,34 @@ app.use(async (req, res, next) => {
   }
 });
 
+// Health Check API
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await query('SELECT NOW()');
+    res.json({ 
+      status: 'ok', 
+      database: 'connected', 
+      time: result.rows[0].now,
+      env: {
+        hasDatabaseUrl: !!process.env.DATABASE_URL,
+        hasPostgresUrl: !!process.env.POSTGRES_URL,
+        nodeEnv: process.env.NODE_ENV
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'disconnected', 
+      error: err.message,
+      env: {
+        hasDatabaseUrl: !!process.env.DATABASE_URL,
+        hasPostgresUrl: !!process.env.POSTGRES_URL,
+        nodeEnv: process.env.NODE_ENV
+      }
+    });
+  }
+});
+
 // Proxy for downloading external resources (bypasses CORS)
 app.get('/api/download-proxy', async (req, res) => {
   const { url } = req.query;
