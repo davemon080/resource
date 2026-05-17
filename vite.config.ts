@@ -20,14 +20,16 @@ export default defineConfig(({mode}) => {
           theme_color: '#000000',
           icons: [
             {
-              src: 'pwa-192x192.png',
+              src: 'https://iili.io/Bp0LZ3Q.jpg',
               sizes: '192x192',
-              type: 'image/png'
+              type: 'image/jpeg',
+              purpose: 'any'
             },
             {
-              src: 'pwa-512x512.png',
+              src: 'https://iili.io/Bp0LZ3Q.jpg',
               sizes: '512x512',
-              type: 'image/png'
+              type: 'image/jpeg',
+              purpose: 'any'
             }
           ]
         },

@@ -106,78 +106,93 @@ export async function query(text: string, params?: any[]) {
   }
 }
 
+let dbInitialized = false;
+let initializingPromise: Promise<void> | null = null;
+
 export async function initDb() {
-  // First ensure tables exist
-  await query(`
-    CREATE TABLE IF NOT EXISTS admins (
-      id VARCHAR(255) PRIMARY KEY,
-      email VARCHAR(255) NOT NULL
-    );
+  if (dbInitialized) return;
+  if (initializingPromise) return initializingPromise;
 
-    CREATE TABLE IF NOT EXISTS modules (
-      id VARCHAR(255) PRIMARY KEY,
-      title VARCHAR(255) NOT NULL,
-      description TEXT,
-      type VARCHAR(10) CHECK (type IN ('video', 'pdf')),
-      video_url TEXT,
-      pdf_url TEXT,
-      thumbnail_url TEXT,
-      order_index INTEGER NOT NULL,
-      duration INTEGER
-    );
+  initializingPromise = (async () => {
+    try {
+      console.log('Initializing database tables...');
+      // First ensure tables exist
+      await query(`
+        CREATE TABLE IF NOT EXISTS admins (
+          id VARCHAR(255) PRIMARY KEY,
+          email VARCHAR(255) NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(255) PRIMARY KEY,
-      email VARCHAR(255) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      display_name VARCHAR(255),
-      photo_url TEXT,
-      unlocked_module_index INTEGER DEFAULT 0,
-      completed BOOLEAN DEFAULT FALSE,
-      completed_at TIMESTAMP
-    );
-  `);
-  
-  // Seed admins
-  try {
-    const adminEmails = ['simonodavido@gmail.com', 'davemon080@gmail.com'];
-    for (const email of adminEmails) {
-      await query(
-        'INSERT INTO admins (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
-        [email.split('@')[0], email]
-      );
+        CREATE TABLE IF NOT EXISTS modules (
+          id VARCHAR(255) PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          type VARCHAR(10) CHECK (type IN ('video', 'pdf')),
+          video_url TEXT,
+          pdf_url TEXT,
+          thumbnail_url TEXT,
+          order_index INTEGER NOT NULL,
+          duration INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(255) PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          display_name VARCHAR(255),
+          photo_url TEXT,
+          unlocked_module_index INTEGER DEFAULT 0,
+          completed BOOLEAN DEFAULT FALSE,
+          completed_at TIMESTAMP
+        );
+      `);
+      
+      // Seed admins
+      try {
+        const adminEmails = ['simonodavido@gmail.com', 'davemon080@gmail.com'];
+        for (const email of adminEmails) {
+          await query(
+            'INSERT INTO admins (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+            [email.split('@')[0], email]
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to seed admins:', err);
+      }
+
+      // Ensure individual columns exist for users
+      try {
+        await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+      } catch (e) {}
+      
+      // Seed default admin user
+      try {
+        const adminEmail = 'davemon080@gmail.com';
+        const adminPassword = 'Admin';
+        const checkAdmin = await query('SELECT * FROM users WHERE email = $1', [adminEmail]);
+        if (checkAdmin.rows.length === 0) {
+          console.log('Seeding default admin user...');
+          const bcrypt = await import('bcryptjs');
+          const hashedPassword = await bcrypt.hash(adminPassword, 10);
+          const id = 'admin-default';
+          await query(
+            'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
+            [id, adminEmail, hashedPassword, 'Administrator']
+          );
+          console.log('Default admin user seeded successfully.');
+        }
+      } catch (err) {
+        console.warn('Failed to seed default user:', err);
+      }
+      
+      dbInitialized = true;
+      console.log('Database initialization complete.');
+    } catch (err) {
+      console.error('Critical: Database initialization failed:', err);
+      initializingPromise = null;
+      throw err;
     }
-  } catch (err) {
-    console.warn('Failed to seed admins:', err);
-  }
+  })();
 
-  // Ensure individual columns exist for users
-  try {
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
-    await query(`ALTER TABLE users ALTER COLUMN email SET NOT NULL`);
-    await query(`ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE (email)`);
-  } catch (err) {
-    console.warn('Note: Some constraints or columns in "users" table might already exist.');
-  }
-
-  try {
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`);
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT`);
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS unlocked_module_index INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE`);
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`);
-  } catch (err) {
-    console.warn('Note: Some columns in "users" table might already exist.');
-  }
-
-  // Ensure individual columns exist for modules
-  try {
-    await query(`ALTER TABLE modules ADD COLUMN IF NOT EXISTS video_url TEXT`);
-    await query(`ALTER TABLE modules ADD COLUMN IF NOT EXISTS pdf_url TEXT`);
-    await query(`ALTER TABLE modules ADD COLUMN IF NOT EXISTS thumbnail_url TEXT`);
-    await query(`ALTER TABLE modules ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0`);
-    await query(`ALTER TABLE modules ADD COLUMN IF NOT EXISTS duration INTEGER`);
-  } catch (err) {
-    console.warn('Note: Some columns in "modules" table might already exist.');
-  }
+  return initializingPromise;
 }

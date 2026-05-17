@@ -16,6 +16,21 @@ app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
+// Middleware to ensure DB is initialized
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    try {
+      await initDb();
+      next();
+    } catch (err: any) {
+      console.error('DB Initialization middleware failed:', err.message);
+      res.status(500).json({ error: 'Database initialization failed', details: err.message });
+    }
+  } else {
+    next();
+  }
+});
+
 // Proxy for downloading external resources (bypasses CORS)
 app.get('/api/download-proxy', async (req, res) => {
   const { url } = req.query;
@@ -38,37 +53,15 @@ app.get('/api/download-proxy', async (req, res) => {
   }
 });
 
-// Initialize DB at top level for serverless environments
-initDb().then(() => {
-  console.log('Database initialized successfully');
-  
-  // Seed default admin user
-  const adminEmail = 'davemon080@gmail.com';
-  const adminPassword = 'Admin';
-  query('SELECT * FROM users WHERE email = $1', [adminEmail]).then(checkAdmin => {
-    if (checkAdmin.rows.length === 0) {
-      console.log('Seeding default admin user...');
-      bcrypt.hash(adminPassword, 10).then(hashedPassword => {
-        const id = 'admin-default';
-        query(
-          'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
-          [id, adminEmail, hashedPassword, 'Administrator']
-        ).then(() => {
-          console.log('Default admin user seeded successfully.');
-        });
-      });
-    }
-  });
-}).catch(err => {
-  console.error('Failed to initialize database or seed admin:', err.message);
-});
+// Initialize DB - Seeding handled inside initDb or separately
+// Middleware ensures it's called before requests
 
 async function startServer() {
   const PORT = 3000;
 }
 
 // Auth API
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', async (req, res, next) => {
     let { email, password, displayName } = req.body;
     try {
       email = email.toLowerCase().trim();
@@ -86,15 +79,11 @@ app.post('/api/auth/signup', async (req, res) => {
         user: { id, email, displayName } 
       });
     } catch (err: any) {
-      if (err.message.includes('unique constraint') || err.message.includes('already exists')) {
-        return res.status(400).json({ error: 'Email already registered' });
-      }
-      console.error('Signup failed:', err.message);
-      res.status(500).json({ error: 'Signup failed', details: err.message });
+      next(err);
     }
   });
 
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', async (req, res, next) => {
     let { email, password } = req.body;
     try {
       email = email.toLowerCase().trim();
@@ -127,8 +116,7 @@ app.post('/api/auth/signup', async (req, res) => {
         } 
       });
     } catch (err: any) {
-      console.error('Login failed:', err.message);
-      res.status(500).json({ error: 'Login failed', details: err.message });
+      next(err);
     }
   });
 
@@ -304,6 +292,16 @@ app.post('/api/auth/signup', async (req, res) => {
       res.status(500).json({ error: 'Failed to fetch students', details: err.message });
     }
   });
+
+// Global Error Handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('Unhandled API Error:', err);
+  const status = err.status || 500;
+  res.status(status).json({ 
+    error: err.message || 'Internal Server Error',
+    details: process.env.NODE_ENV === 'production' ? null : err.stack
+  });
+});
 
 // Vite middleware for development
 async function setupVite() {
