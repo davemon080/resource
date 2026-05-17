@@ -9,67 +9,66 @@ import { initDb, query } from './src/lib/db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+export { app };
 
-  app.use(cors());
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(cors());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-  // Proxy for downloading external resources (bypasses CORS)
-  app.get('/api/download-proxy', async (req, res) => {
-    const { url } = req.query;
-    if (!url || typeof url !== 'string') {
-      return res.status(400).json({ error: 'URL is required' });
-    }
-
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Failed to fetch from source: ${response.statusText}`);
-      
-      const contentType = response.headers.get('content-type');
-      if (contentType) res.setHeader('Content-Type', contentType);
-      
-      const arrayBuffer = await response.arrayBuffer();
-      res.send(Buffer.from(arrayBuffer));
-    } catch (err: any) {
-      console.error('Proxy failed:', err.message);
-      res.status(500).json({ error: 'Failed to proxy resource', details: err.message });
-    }
-  });
-
-  // Initialize DB tables
-  try {
-    console.log('Environment Debug:', {
-      hasDatabaseUrl: !!process.env.DATABASE_URL,
-      hasPostgresUrl: !!process.env.POSTGRES_URL,
-      nodeEnv: process.env.NODE_ENV,
-      envKeys: Object.keys(process.env).filter(k => k.includes('URL') || k.includes('DB') || k.includes('POSTGRES'))
-    });
-    await initDb();
-    console.log('Database initialized successfully');
-    
-    // Seed default admin user
-    const adminEmail = 'davemon080@gmail.com';
-    const adminPassword = 'Admin';
-    const checkAdmin = await query('SELECT * FROM users WHERE email = $1', [adminEmail]);
-    if (checkAdmin.rows.length === 0) {
-      console.log('Seeding default admin user...');
-      const hashedPassword = await bcrypt.hash(adminPassword, 10);
-      const id = 'admin-default';
-      await query(
-        'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
-        [id, adminEmail, hashedPassword, 'Administrator']
-      );
-      console.log('Default admin user seeded successfully.');
-    }
-  } catch (err: any) {
-    console.error('Failed to initialize database or seed admin:', err.message);
+// Proxy for downloading external resources (bypasses CORS)
+app.get('/api/download-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'URL is required' });
   }
 
-  // Auth API
-  app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch from source: ${response.statusText}`);
+    
+    const contentType = response.headers.get('content-type');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    console.error('Proxy failed:', err.message);
+    res.status(500).json({ error: 'Failed to proxy resource', details: err.message });
+  }
+});
+
+// Initialize DB at top level for serverless environments
+initDb().then(() => {
+  console.log('Database initialized successfully');
+  
+  // Seed default admin user
+  const adminEmail = 'davemon080@gmail.com';
+  const adminPassword = 'Admin';
+  query('SELECT * FROM users WHERE email = $1', [adminEmail]).then(checkAdmin => {
+    if (checkAdmin.rows.length === 0) {
+      console.log('Seeding default admin user...');
+      bcrypt.hash(adminPassword, 10).then(hashedPassword => {
+        const id = 'admin-default';
+        query(
+          'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
+          [id, adminEmail, hashedPassword, 'Administrator']
+        ).then(() => {
+          console.log('Default admin user seeded successfully.');
+        });
+      });
+    }
+  });
+}).catch(err => {
+  console.error('Failed to initialize database or seed admin:', err.message);
+});
+
+async function startServer() {
+  const PORT = 3000;
+}
+
+// Auth API
+app.post('/api/auth/signup', async (req, res) => {
     let { email, password, displayName } = req.body;
     try {
       email = email.toLowerCase().trim();
@@ -306,24 +305,30 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+// Vite middleware for development
+async function setupVite() {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
 }
 
-startServer();
+const PORT = 3000;
+if (!process.env.VERCEL) {
+  setupVite().then(() => {
+    startServer().then(() => {
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Server running on port ${PORT}`);
+      });
+    });
+  });
+}

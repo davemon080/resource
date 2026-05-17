@@ -128,9 +128,6 @@ export default function Profile() {
         <p className="text-zinc-500 font-medium text-lg">Manage your profile and security preferences.</p>
       </header>
 
-      {/* Offline Downloads Section */}
-      <OfflineDownloads />
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         {/* Profile Sidebar */}
         <div className="space-y-6">
@@ -290,6 +287,9 @@ export default function Profile() {
           </Card>
         </div>
       </div>
+
+      {/* Offline Downloads Section */}
+      <OfflineDownloads />
     </div>
   );
 }
