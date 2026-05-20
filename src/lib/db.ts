@@ -1,6 +1,8 @@
 import pg from 'pg';
-import bcrypt from 'bcryptjs';
+import * as bcryptModule from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
+
+const bcrypt = (bcryptModule as any).default || bcryptModule;
 const { Pool } = pg;
 
 let pool: any = null;
@@ -18,7 +20,16 @@ export function getPool() {
       throw new Error('Database connection string is missing.');
     }
 
-    const cleanUrl = connectionString.trim().replace(/^["']|["']$/g, '');
+    let cleanUrl = connectionString.trim().replace(/^["']|["']$/g, '');
+    
+    // Auto-strip unsupported parameters like channel_binding for node-postgres (pg) drivers
+    if (cleanUrl.includes('channel_binding=')) {
+      cleanUrl = cleanUrl
+        .replace(/([?&])channel_binding=[^&]*(&?)/g, '$1')
+        .replace(/[?&]$/, ''); // strip trailing ? or &
+      console.log('[DB] Excised channel_binding parameter for pg driver safety.');
+    }
+    
     console.log('Database connecting to Neon Postgres...');
     
     const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1') || cleanUrl.includes('0.0.0.0');
@@ -35,6 +46,11 @@ export function getPool() {
       max: isServerless ? 2 : 20, // Keep connection pool extremely thin on serverless functions to avoid connection exhaustion
       idleTimeoutMillis: isServerless ? 10000 : 60000, // Close idle connections quickly in serverless environments
       connectionTimeoutMillis: 30000, // 30 seconds connection timeout for cold-starts
+    });
+
+    // Prevent unhandled idle connection errors from crashing Vercel serverless functions
+    pool.on('error', (err: any) => {
+      console.error('[DB] Unexpected idle database pool client error:', err.message);
     });
   }
   return pool;

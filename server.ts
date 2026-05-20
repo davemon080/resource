@@ -2,13 +2,15 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
-import bcrypt from 'bcryptjs';
+import * as bcryptModule from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+
+const bcrypt = (bcryptModule as any).default || bcryptModule;
 import { randomUUID } from 'node:crypto';
 import compression from 'compression';
 import { initDb, query, getPool } from './src/lib/db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'd1e7c5b6-c0c1-40be-a7ba-02fcb323c2a9';
 const API_SECRET = process.env.API_SECRET;
 
 const app = express();
