@@ -82,6 +82,23 @@ export async function initDb() {
       const pool = getPool();
       // Test connection
       await pool.query('SELECT 1');
+
+      // Optimization for serverless (Vercel) cold-starts: Check if tables already exist
+      // This reduces startup overhead from 12+ sequential queries to a single quick check.
+      const tableCheck = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public'
+          AND c.relname = 'users'
+        );
+      `);
+      
+      if (tableCheck.rows[0]?.exists) {
+        console.log('[DB] Tables already exist, skipping heavy schema creation.');
+        dbInitialized = true;
+        return;
+      }
       
       // Use parallel execution for non-dependent table creation
       await Promise.all([

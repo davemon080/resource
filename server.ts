@@ -59,15 +59,17 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
 
 app.use(authMiddleware);
 
-// DB Initialization
-(async () => {
-  try {
-    await initDb();
-    console.log('Database initialized successfully on startup.');
-  } catch (err: any) {
-    console.error('Failed to initialize database on startup:', err.message);
-  }
-})();
+// DB Initialization (Skip on Vercel startup to avoid redundant cold-start database load; the middleware below handles it lazily)
+if (!process.env.VERCEL) {
+  (async () => {
+    try {
+      await initDb();
+      console.log('Database initialized successfully on startup.');
+    } catch (err: any) {
+      console.error('Failed to initialize database on startup:', err.message);
+    }
+  })();
+}
 
 // Middleware to ensure DB is initialized (acts as a safety and wait mechanism)
 app.use((req, res, next) => {
