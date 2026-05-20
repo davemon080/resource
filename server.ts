@@ -6,7 +6,6 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'node:crypto';
 import compression from 'compression';
-import { createServer as createViteServer } from 'vite';
 import { initDb, query, getPool } from './src/lib/db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -25,8 +24,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
 }));
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.json({ limit: '300mb' }));
+app.use(express.urlencoded({ limit: '300mb', extended: true }));
 
 // Request Logger with performance monitoring
 app.use((req, res, next) => {
@@ -640,6 +639,7 @@ app.use((err: any, req: any, res: any, next: any) => {
 // Vite middleware for development
 async function setupVite() {
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

@@ -118,11 +118,12 @@ export default function AdminModuleDetails() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 50MB Limit as requested
-    const limit = 50 * 1024 * 1024;
+    // 200MB Limit for videos, 50MB for other assets (PDFs, thumbnails)
+    const limit = field === 'videoUrl' ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
+    const limitName = field === 'videoUrl' ? '200MB' : '50MB';
     
     if (file.size > limit) {
-      toast.error('File size must be less than 50MB.');
+      toast.error(`File size must be less than ${limitName}.`);
       return;
     }
 
@@ -267,7 +268,7 @@ export default function AdminModuleDetails() {
                           <TabsContent value="file" className="pt-2">
                             <div className="flex flex-col gap-2">
                               <Input type="file" accept="video/*" onChange={(e) => handleFileUpload(e, 'videoUrl')} />
-                              <p className="text-[10px] text-zinc-500 italic">50MB Limit. Warning: Firestore documents strictly limit to 1MB total size.</p>
+                              <p className="text-[10px] text-zinc-500 italic">200MB Limit.</p>
                             </div>
                           </TabsContent>
                        </Tabs>
