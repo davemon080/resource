@@ -78,6 +78,6 @@ export async function removeOfflineResource(moduleId: string, type: 'video' | 'p
 }
 
 export async function isResourceDownloaded(moduleId: string, type: 'video' | 'pdf'): Promise<boolean> {
-  const count = await offlineDb.resources.where({ id: `${moduleId}-${type}` }).count();
-  return count > 0;
+  const item = await getOfflineResource(moduleId, type);
+  return !!item;
 }

@@ -21,14 +21,20 @@ export function getPool() {
     const cleanUrl = connectionString.trim().replace(/^["']|["']$/g, '');
     console.log('Database connecting to Neon Postgres...');
     
+    const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1') || cleanUrl.includes('0.0.0.0');
+    const isServerless = typeof process !== 'undefined' && (process.env.VERCEL === '1' || !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME);
+
+    // Default to secure SSL for cloud hosts (Neon, Supabase, Render, ElephantSQL, Elephant, etc.)
+    const sslConfig = isLocalhost || cleanUrl.includes('sslmode=disable')
+      ? false
+      : { rejectUnauthorized: false };
+
     pool = new Pool({
       connectionString: cleanUrl,
-      ssl: cleanUrl.includes('sslmode=require') || cleanUrl.includes('sslmode=verify-full') 
-        ? { rejectUnauthorized: false } 
-        : false,
-      max: 20, // Increase max connections
-      idleTimeoutMillis: 60000, // Keep connections open longer
-      connectionTimeoutMillis: 10000, 
+      ssl: sslConfig,
+      max: isServerless ? 2 : 20, // Keep connection pool extremely thin on serverless functions to avoid connection exhaustion
+      idleTimeoutMillis: isServerless ? 10000 : 60000, // Close idle connections quickly in serverless environments
+      connectionTimeoutMillis: 30000, // 30 seconds connection timeout for cold-starts
     });
   }
   return pool;
@@ -39,7 +45,12 @@ export async function query(text: string, params?: any[]) {
   try {
     const res = await getPool().query(text, params);
     const duration = Date.now() - start;
-    const resultSize = JSON.stringify(res.rows).length;
+    let resultSize = 0;
+    try {
+      resultSize = JSON.stringify(res.rows).length;
+    } catch (e: any) {
+      console.warn('[DB] Failed to stringify rows for size estimation:', e.message);
+    }
     
     if (duration > 500) {
       console.warn(`[SLOW QUERY] Duration: ${duration}ms, Rows: ${res.rowCount}, Size: ${(resultSize / 1024).toFixed(2)}KB`);
@@ -113,33 +124,35 @@ export async function initDb() {
       // 4. Create Indexes for performance
       await Promise.all([
         query('CREATE INDEX IF NOT EXISTS idx_modules_order ON modules(order_index)'),
-        query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
+        query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)'),
+        query('CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email)')
       ]).catch(e => console.warn('[DB] Failed to create indexes:', e.message));
 
-      // 5. Column checks (idempotent)
-      const alterQueries = [
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT`,
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS unlocked_module_index INTEGER DEFAULT 0`,
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE`,
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
-        `ALTER TABLE modules ADD COLUMN IF NOT EXISTS video_url TEXT`,
-        `ALTER TABLE modules ADD COLUMN IF NOT EXISTS pdf_url TEXT`,
-        `ALTER TABLE modules ADD COLUMN IF NOT EXISTS thumbnail_url TEXT`,
-        `ALTER TABLE modules ADD COLUMN IF NOT EXISTS duration INTEGER`
-      ];
-
-      // Run column checks sequentially to avoid locks
-      for (const q of alterQueries) {
-        await query(q).catch(() => {});
-      }
+      // 5. Column checks (idempotent - batched into single calls for ultra-fast performance)
+      await Promise.all([
+        query(`
+          ALTER TABLE users 
+            ADD COLUMN IF NOT EXISTS password_hash TEXT,
+            ADD COLUMN IF NOT EXISTS display_name VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS photo_url TEXT,
+            ADD COLUMN IF NOT EXISTS unlocked_module_index INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
+        `),
+        query(`
+          ALTER TABLE modules 
+            ADD COLUMN IF NOT EXISTS video_url TEXT,
+            ADD COLUMN IF NOT EXISTS pdf_url TEXT,
+            ADD COLUMN IF NOT EXISTS thumbnail_url TEXT,
+            ADD COLUMN IF NOT EXISTS duration INTEGER
+        `)
+      ]).catch(e => console.warn('[DB] Failed columns verification:', e.message));
       
-      // 6. Seeding logic
+      // 6. Seeding logic (Setup real admin emails only, no dummy modules)
       const adminEmails = ['simonodavido@gmail.com', 'davemon080@gmail.com', 'daveimagodei@gmail.com'];
       for (const email of adminEmails) {
         await query(
-          'INSERT INTO admins (id, email) SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM admins WHERE email = $2)',
+          'INSERT INTO admins (id, email) SELECT $1, $2::varchar WHERE NOT EXISTS (SELECT 1 FROM admins WHERE email = $2::varchar)',
           [randomUUID(), email]
         ).catch(() => {});
       }
@@ -153,22 +166,6 @@ export async function initDb() {
           'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
           [randomUUID(), adminEmail, hashedPassword, 'Administrator']
         ).catch(e => console.error('[DB] Admin seeding failed:', e.message));
-      }
-      
-      const checkModules = await query('SELECT 1 FROM modules LIMIT 1');
-      if (checkModules.rows.length === 0) {
-        console.log('[DB] Seeding initial modules...');
-        const modules = [
-          ['11111111-1111-1111-1111-111111111111', 'Introduction to Full Stack Development', 'An overview of the modern web development ecosystem.', 'video', 'https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', 0, 60],
-          ['22222222-2222-2222-2222-222222222222', 'Cloud Architecture Basics', 'Learn the fundamentals of cloud infrastructure.', 'video', 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', 1, 120]
-        ];
-        
-        for (const [id, title, desc, type, url, idx, dur] of modules) {
-          await query(
-            'INSERT INTO modules (id, title, description, type, video_url, order_index, duration) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING',
-            [id, title, desc, type, url, idx, dur]
-          ).catch(() => {});
-        }
       }
       
       dbInitialized = true;

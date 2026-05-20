@@ -6,14 +6,66 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { ChevronLeft, PlayCircle, FileText, CheckCircle2, Lock, AlertCircle, Download, CloudOff, Trash2, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, PlayCircle, FileText, CheckCircle2, Lock, AlertCircle, Download, CloudOff, Trash2, Loader2, Zap, Sparkles } from 'lucide-react';
 import { ModuleType } from '@/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { useOfflineResource } from '@/hooks/useOfflineResource';
+import { isResourceDownloaded } from '@/lib/offline-db';
 import ReactPlayer from 'react-player';
 
-const Player = ReactPlayer as any;
+const PlayerComponent = ReactPlayer as any;
+
+function Player({ url, onReady, onStart, onError, onEnded, controls, poster }: any) {
+  const isLocalOrBlob = !url || url.startsWith('blob:') || url.startsWith('/') || url.startsWith('data:');
+
+  if (isLocalOrBlob) {
+    return (
+      <video
+        src={url}
+        controls={controls}
+        playsInline
+        preload="auto"
+        poster={poster}
+        controlsList="nodownload"
+        className="w-full h-full object-contain bg-zinc-950"
+        style={{ width: '100%', height: '100%' }}
+        onCanPlay={onReady}
+        onLoadedData={onReady}
+        onPlay={onStart}
+        onEnded={onEnded}
+        onError={(e) => {
+          console.error('HTML5 Video Error:', e);
+          if (onError) onError(e);
+        }}
+      />
+    );
+  }
+
+  return (
+    <PlayerComponent
+      url={url}
+      controls={controls}
+      width="100%"
+      height="100%"
+      style={{ position: 'absolute', top: 0, left: 0 }}
+      onReady={onReady}
+      onStart={onStart}
+      onError={onError}
+      onEnded={onEnded}
+      config={{
+        file: {
+          attributes: {
+            preload: 'auto',
+            poster: poster,
+            controlsList: 'nodownload',
+            style: { width: '100%', height: '100%' }
+          }
+        }
+      }}
+    />
+  );
+}
 
 export default function VideoDetails() {
   const { moduleId } = useParams();
@@ -23,7 +75,6 @@ export default function VideoDetails() {
   const [videoFinished, setVideoFinished] = useState(false);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
-  const [hasStarted, setHasStarted] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   const [lastModuleId, setLastModuleId] = useState(moduleId);
@@ -32,7 +83,6 @@ export default function VideoDetails() {
   // Reset state immediately on module change during render to prevent state leak/playing old module
   if (moduleId !== lastModuleId) {
     setLastModuleId(moduleId);
-    setHasStarted(false);
     setIsVideoLoading(false);
     setVideoError(null);
     setVideoFinished(false);
@@ -45,11 +95,21 @@ export default function VideoDetails() {
   const videoOffline = useOfflineResource(moduleId ?? '', 'video');
   const pdfOffline = useOfflineResource(moduleId ?? '', 'pdf');
 
+  // Next sequential video module pointer
+  const nextVideoModule = modules.slice(currentModuleIndex + 1).find(m => m.type === ModuleType.VIDEO);
+
+  const handleCurrentVideoReady = () => {
+    setIsVideoLoading(false);
+  };
+
+  const handleCurrentVideoStart = () => {
+    setIsVideoLoading(false);
+  };
+
   useEffect(() => {
     setVideoFinished(false);
-    setIsVideoLoading(false);
+    setIsVideoLoading(true);
     setVideoError(null);
-    setHasStarted(false);
   }, [moduleId]);
 
   useEffect(() => {
@@ -91,14 +151,20 @@ export default function VideoDetails() {
     }
   }, [loading, isLocked, navigate]);
 
-  const handleVideoEnded = () => {
+  const handleVideoEnded = async () => {
     setVideoFinished(true);
     toast.success('Module completed! You can now proceed to the next one.');
+    await updateProgress(currentModuleIndex + 1);
   };
 
   const handleCompleteModule = async () => {
     await updateProgress(currentModuleIndex + 1);
-    navigate('/');
+    const nextModule = modules[currentModuleIndex + 1];
+    if (nextModule) {
+      navigate(`/modules/${nextModule.id}`);
+    } else {
+      navigate('/');
+    }
   };
 
   if (loading || !currentModule) {
@@ -151,7 +217,7 @@ export default function VideoDetails() {
                     </motion.div>
                   )}
 
-                  {hasStarted && !videoSrc && !isVideoLoading && !videoError && (
+                  {!videoSrc && !videoError && (
                     <motion.div 
                       key="no-content"
                       initial={{ opacity: 0 }}
@@ -164,35 +230,15 @@ export default function VideoDetails() {
                       <p className="text-zinc-400 text-sm max-w-xs">This module's video source is missing or invalid.</p>
                     </motion.div>
                   )}
-
-                  {isVideoLoading && hasStarted && !videoError && (
-                    <motion.div 
-                      key="loading"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-zinc-900/80 backdrop-blur-sm"
-                    >
-                      <Loader2 className="w-10 h-10 animate-spin text-white mb-4" />
-                      <p className="text-white font-bold text-sm uppercase tracking-widest text-center">Buffering Content...</p>
-                    </motion.div>
-                  )}
                 </AnimatePresence>
 
                 <div className="absolute inset-0 w-full h-full">
                   <Player
                     url={videoSrc}
                     controls
-                    width="100%"
-                    height="100%"
-                    playing={hasStarted && !!videoSrc}
-                    onReady={() => {
-                      if (hasStarted) setIsVideoLoading(false);
-                    }}
-                    onStart={() => {
-                      setHasStarted(true);
-                      setIsVideoLoading(false);
-                    }}
+                    poster={currentModule.thumbnailUrl}
+                    onReady={handleCurrentVideoReady}
+                    onStart={handleCurrentVideoStart}
                     onError={(e: any) => {
                       // Only show error if we have a source but it failed
                       if (videoSrc) {
@@ -204,42 +250,8 @@ export default function VideoDetails() {
                       }
                     }}
                     onEnded={handleVideoEnded}
-                    config={{
-                      file: {
-                        attributes: {
-                          controlsList: 'nodownload',
-                          style: { width: '100%', height: '100%', objectFit: 'contain' }
-                        }
-                      }
-                    }}
                   />
                 </div>
-
-                {!hasStarted && (
-                  <div 
-                    className="absolute inset-0 z-50 cursor-pointer group bg-zinc-900 flex items-center justify-center transition-opacity"
-                    onClick={() => {
-                      if (videoSrc) {
-                        setHasStarted(true);
-                        setIsVideoLoading(true);
-                      } else {
-                        setHasStarted(true);
-                        setIsVideoLoading(false);
-                      }
-                    }}
-                  >
-                    {currentModule.thumbnailUrl && (
-                      <img 
-                        src={currentModule.thumbnailUrl} 
-                        alt="" 
-                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-40 transition-opacity"
-                      />
-                    )}
-                    <div className="relative z-10 w-24 h-24 bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center border border-white/20 group-hover:scale-110 group-hover:bg-white/20 transition-all duration-300">
-                      <PlayCircle className="w-12 h-12 text-white fill-white/20 group-hover:fill-white transition-all" />
-                    </div>
-                  </div>
-                )}
               </div>
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-50 border-2 border-dashed border-zinc-200 p-12 text-center">
@@ -250,17 +262,15 @@ export default function VideoDetails() {
                   <Button 
                     size="lg" 
                     className="gap-2"
-                    onClick={() => {
+                    onClick={async () => {
                       if (pdfOffline.isDownloaded && pdfOffline.resource) {
                         const url = URL.createObjectURL(pdfOffline.resource.blob);
                         window.open(url, '_blank');
-                        // No revokeObjectURL here as it opens in new tab, 
-                        // browser handles or it leaks once. 
-                        // Better to use a viewer but for now simple download.
                       } else {
                         window.open(currentModule.pdfUrl, '_blank');
                       }
                       setVideoFinished(true);
+                      await updateProgress(currentModuleIndex + 1);
                     }}
                   >
                     {pdfOffline.isDownloaded ? 'View PDF Offline' : 'View PDF'}
@@ -269,6 +279,8 @@ export default function VideoDetails() {
               </div>
             )}
           </motion.div>
+
+
 
           {!isOnline && (
             <div className="bg-red-50 border border-red-100 p-4 rounded-xl flex items-center gap-3 text-red-800 animate-pulse">
@@ -373,8 +385,17 @@ export default function VideoDetails() {
                     className="gap-2 bg-zinc-900 text-white hover:bg-zinc-800 font-bold px-8 shadow-lg shadow-zinc-200"
                     onClick={handleCompleteModule}
                   >
-                    Finish Module
-                    <CheckCircle2 className="w-4 h-4" />
+                    {currentModuleIndex + 1 < modules.length ? (
+                      <>
+                        Next Lesson
+                        <ChevronRight className="w-4 h-4" />
+                      </>
+                    ) : (
+                      <>
+                        Complete Course
+                        <CheckCircle2 className="w-4 h-4" />
+                      </>
+                    )}
                   </Button>
                 </motion.div>
               )}

@@ -4,6 +4,67 @@ export { ModuleType };
 export type { Module, UserProgress };
 const API_URL = '/api';
 
+// Helper to extract the actual origin under all conditions (including sandboxed iframe opaque origins and blob: URLs)
+function extractHttpOrigin(str: any): string | null {
+  if (!str || typeof str !== 'string') return null;
+  // Regex to match protocol + domain. Will match inside blob:http://... or normal http://...
+  const match = str.match(/https?:\/\/[^\/]+/i);
+  return match ? match[0] : null;
+}
+
+let detectedOrigin = '';
+try {
+  if (typeof window !== 'undefined') {
+    // 1. Try process.env.APP_URL if defined on process.env (Vite define)
+    if (typeof process !== 'undefined' && process.env && process.env.APP_URL) {
+      const origin = extractHttpOrigin(process.env.APP_URL);
+      if (origin) detectedOrigin = origin;
+    }
+    
+    // 2. Try import.meta.url (extremely reliable in production as it points to container asset host, supports blob: URLs)
+    if (!detectedOrigin && import.meta.url) {
+      const origin = extractHttpOrigin(import.meta.url);
+      if (origin) detectedOrigin = origin;
+    }
+
+    // 3. Try window.location.href (very reliable for sandboxed/non-sandboxed iframe URLs to extract the real domain)
+    if (!detectedOrigin && window.location && window.location.href) {
+      const origin = extractHttpOrigin(window.location.href);
+      if (origin && !origin.startsWith('https://ai.studio') && !origin.startsWith('https://aistudio.google.com')) {
+        detectedOrigin = origin;
+      }
+    }
+    
+    // 4. Try document.referrer (points to parent page host that embeds the iframe, ignore AIS platform hosts)
+    if (!detectedOrigin && document.referrer) {
+      const refOrig = extractHttpOrigin(document.referrer);
+      if (refOrig) {
+        try {
+          const refUrl = new URL(refOrig);
+          const refHost = refUrl.hostname.toLowerCase();
+          const isAISPlatform = refHost.endsWith('google.com') || 
+                                refHost.endsWith('google.dev') || 
+                                refHost.endsWith('ai.studio') || 
+                                refHost.endsWith('google.app') ||
+                                refHost === 'ai.studio';
+          if (!isAISPlatform) {
+            detectedOrigin = refUrl.origin;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    // 5. Try window.location.origin fallback
+    if (!detectedOrigin && window.location.origin && window.location.origin !== 'null') {
+      detectedOrigin = window.location.origin;
+    }
+  }
+} catch (e) {
+  console.warn('[API] Origin detection failed:', e);
+}
+
 export const apiService = {
   // Helper for calling the backend API directly
   async callBackend(endpoint: string, options: RequestInit = {}) {
@@ -14,33 +75,55 @@ export const apiService = {
     } as any;
 
     if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+      const cleanToken = token.trim().replace(/[\r\n\t]/g, '');
+      if (cleanToken && cleanToken !== 'undefined' && cleanToken !== 'null') {
+        headers['Authorization'] = `Bearer ${cleanToken}`;
+      }
     }
 
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${API_URL}${cleanEndpoint}`;
     
-    // Server-side calls (SSR/Node) need absolute URL if used
-    const fetchUrl = typeof window === 'undefined' ? `http://localhost:3000${url}` : url;
+    // Server-side calls (SSR/Node) need absolute localhost URL, client-side uses absolute URL if detected, otherwise fallback to import.meta.url host
+    let rawFetchUrl = '';
+    if (typeof window === 'undefined') {
+      rawFetchUrl = `http://localhost:3000${url}`;
+    } else {
+      let base = detectedOrigin;
+      if (!base && window.location.origin && window.location.origin !== 'null') {
+        base = window.location.origin;
+      }
+      
+      // Ultimate absolute fallback from import.meta.url if base is still empty/about:/null
+      if (!base || base.startsWith('about:') || base === 'null') {
+        try {
+          if (import.meta.url) {
+            const origin = extractHttpOrigin(import.meta.url);
+            if (origin) base = origin;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (base && !base.startsWith('about:') && base !== 'null') {
+        rawFetchUrl = `${base}${url}`;
+      } else {
+        rawFetchUrl = url;
+      }
+    }
+
+    const fetchUrl = rawFetchUrl.trim().replace(/[\r\n\t]/g, '');
     
     if (typeof window !== 'undefined') {
       console.log(`[API] Fetching ${fetchUrl}`);
     }
     
-    // Add a 90-second timeout to fetch requests
-    const controller = new AbortController();
-    const id = setTimeout(() => {
-      console.warn(`[API] Timeout reached for ${fetchUrl} (90s)`);
-      controller.abort();
-    }, 90000);
-
     try {
       const response = await fetch(fetchUrl, {
         ...options,
-        headers,
-        signal: controller.signal
+        headers
       });
-      clearTimeout(id);
 
       if (!response.ok) {
         let errorData;
@@ -54,10 +137,6 @@ export const apiService = {
 
       return response.json();
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        console.error(`[API Timeout] Request to ${fetchUrl} timed out after 90s`);
-        throw new Error('The request is taking too long. The server might be warming up, please wait a moment.');
-      }
       console.error(`[API Error] Request to ${fetchUrl} failed:`, err.message);
       throw err;
     }

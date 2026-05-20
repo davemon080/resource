@@ -19,7 +19,34 @@ import {
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 
-const Player = ReactPlayer as any;
+const PlayerComponent = ReactPlayer as any;
+
+function Player({ url, controls, style, ...props }: any) {
+  const isLocalOrBlob = !url || url.startsWith('blob:') || url.startsWith('/') || url.startsWith('data:');
+
+  if (isLocalOrBlob) {
+    return (
+      <video
+        src={url}
+        controls={controls}
+        playsInline
+        className="w-full h-full object-contain bg-zinc-950"
+        style={style}
+      />
+    );
+  }
+
+  return (
+    <PlayerComponent
+      url={url}
+      controls={controls}
+      width="100%"
+      height="100%"
+      style={style}
+      {...props}
+    />
+  );
+}
 
 enum ModuleType {
   VIDEO = 'video',

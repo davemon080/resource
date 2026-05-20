@@ -17,7 +17,11 @@ export { app };
 
 app.use(compression());
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    // Dynamically mirror the origin header back to fully support all browser request scenarios, including sandboxed 'null' origins
+    callback(null, true);
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
 }));
@@ -307,6 +311,115 @@ app.post('/api/auth/login', async (req, res, next) => {
   let lastCacheTime = 0;
   const CACHE_TTL = 30000; // 30 seconds
 
+  // Lightweight streaming endpoints for base64 storage in database
+  app.get('/api/modules/:id/video-data', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const result = await query('SELECT video_url FROM modules WHERE id = $1', [id]);
+      if (result.rows.length === 0 || !result.rows[0].video_url) {
+        return res.status(404).send('Not Found');
+      }
+      const val = result.rows[0].video_url;
+      if (val.startsWith('data:')) {
+        const parts = val.split(',');
+        const info = parts[0];
+        const base64Data = parts[1];
+        const mime = info.match(/:(.*?);/)?.[1] || 'video/mp4';
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        const totalLength = buffer.length;
+        const range = req.headers.range;
+
+        if (range) {
+          const parts = range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1;
+
+          if (start >= totalLength || end >= totalLength) {
+            res.setHeader('Content-Range', `bytes */${totalLength}`);
+            return res.status(416).send('Requested Range Not Satisfiable');
+          }
+
+          const chunksize = (end - start) + 1;
+          const chunk = buffer.subarray(start, end + 1);
+
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${totalLength}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize,
+            'Content-Type': mime,
+            'Cache-Control': 'public, max-age=31536000'
+          });
+          return res.end(chunk);
+        } else {
+          res.writeHead(200, {
+            'Content-Length': totalLength,
+            'Content-Type': mime,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=31536000'
+          });
+          return res.end(buffer);
+        }
+      }
+      return res.redirect(val);
+    } catch (err: any) {
+      console.error('Failed to stream video:', err.message);
+      res.status(500).send(err.message);
+    }
+  });
+
+  app.get('/api/modules/:id/pdf-data', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const result = await query('SELECT pdf_url FROM modules WHERE id = $1', [id]);
+      if (result.rows.length === 0 || !result.rows[0].pdf_url) {
+        return res.status(404).send('Not Found');
+      }
+      const val = result.rows[0].pdf_url;
+      if (val.startsWith('data:')) {
+        const parts = val.split(',');
+        const info = parts[0];
+        const base64Data = parts[1];
+        const mime = info.match(/:(.*?);/)?.[1] || 'application/pdf';
+        const buffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        return res.send(buffer);
+      }
+      return res.redirect(val);
+    } catch (err: any) {
+      console.error('Failed to stream PDF:', err.message);
+      res.status(500).send(err.message);
+    }
+  });
+
+  app.get('/api/modules/:id/thumbnail-data', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const result = await query('SELECT thumbnail_url FROM modules WHERE id = $1', [id]);
+      if (result.rows.length === 0 || !result.rows[0].thumbnail_url) {
+        return res.status(404).send('Not Found');
+      }
+      const val = result.rows[0].thumbnail_url;
+      if (val.startsWith('data:')) {
+        const parts = val.split(',');
+        const info = parts[0];
+        const base64Data = parts[1];
+        const mime = info.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        const buffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        return res.send(buffer);
+      }
+      return res.redirect(val);
+    } catch (err: any) {
+      console.error('Failed to stream thumbnail:', err.message);
+      res.status(500).send(err.message);
+    }
+  });
+
   app.get('/api/modules', async (req, res) => {
     const now = Date.now();
     if (modulesCache && (now - lastCacheTime < CACHE_TTL)) {
@@ -317,17 +430,32 @@ app.post('/api/auth/login', async (req, res, next) => {
     try {
       const result = await query('SELECT * FROM modules ORDER BY order_index ASC');
       // Map Snake Case to Camel Case for frontend compatibility
-      const modules = result.rows.map(row => ({
-        id: row.id,
-        title: row.title,
-        description: row.description,
-        type: row.type,
-        videoUrl: row.video_url,
-        pdfUrl: row.pdf_url,
-        thumbnailUrl: row.thumbnail_url,
-        order: row.order_index,
-        duration: row.duration
-      }));
+      const modules = result.rows.map(row => {
+        // Serve local data URLs safely via dedicated streaming endpoints to avoid massive response payload overheads
+        const videoUrl = row.video_url && row.video_url.startsWith('data:')
+          ? `/api/modules/${row.id}/video-data`
+          : row.video_url;
+          
+        const pdfUrl = row.pdf_url && row.pdf_url.startsWith('data:')
+          ? `/api/modules/${row.id}/pdf-data`
+          : row.pdf_url;
+          
+        const thumbnailUrl = row.thumbnail_url && row.thumbnail_url.startsWith('data:')
+          ? `/api/modules/${row.id}/thumbnail-data`
+          : row.thumbnail_url;
+
+        return {
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          type: row.type,
+          videoUrl,
+          pdfUrl,
+          thumbnailUrl,
+          order: row.order_index,
+          duration: row.duration
+        };
+      });
       
       if (modules.length > 0) {
         modulesCache = modules;
