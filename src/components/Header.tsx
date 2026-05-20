@@ -6,19 +6,20 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useUserProgress } from '@/hooks/useUserProgress';
 
+const ADMIN_EMAILS = ['davemon080@gmail.com', 'daveimagodei@gmail.com', 'simonodavido@gmail.com'];
+
 export default function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
   const { progress } = useUserProgress();
-  const ADMIN_EMAIL = 'davemon080@gmail.com';
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
-  const isAdmin = user?.email === ADMIN_EMAIL;
+  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
 
   if (!user || location.pathname === '/login') return null;
 

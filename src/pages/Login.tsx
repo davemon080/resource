@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { useAuth } from '@/lib/auth_context';
@@ -18,38 +18,83 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { user, loading: authLoading, setUser } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      console.log('[Login] User detected, checking roles...', user.email);
+      const adminEmails = ['davemon080@gmail.com', 'daveimagodei@gmail.com', 'simonodavido@gmail.com'];
+      const isUserAdmin = adminEmails.includes(user.email);
+      
+      const target = isUserAdmin ? '/admin' : '/';
+      console.log(`[Login] Redirecting to ${target}`);
+      
+      // Use a small timeout to ensure state is settled and navigate can work
+      const timeout = setTimeout(() => {
+        navigate(target, { replace: true });
+      }, 100);
+      return () => clearTimeout(timeout);
+    } else {
+      console.log('[Login] Not redirecting:', { authLoading, hasUser: !!user });
+    }
+  }, [user, authLoading, navigate]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || (!isLogin && !displayName)) {
-      toast.error('Please fill in all fields.');
+    
+    if (!email) {
+      toast.error('Please enter your email.');
       return;
     }
 
     setLoading(true);
     try {
       if (isLogin) {
-        const response = await apiService.login({ email, password });
-        login(response.token, response.user);
-        toast.success('Successfully logged in!');
-        if (response.user.email === 'davemon080@gmail.com') {
-          navigate('/admin');
-        } else {
-          navigate('/');
+        if (!password) {
+          toast.error('Please enter your password.');
+          setLoading(false);
+          return;
+        }
+
+        const data = await apiService.login(email, password);
+        
+        if (data.user) {
+          toast.success('Successfully logged in!');
+          setUser(data.user); // This will trigger the useEffect
         }
       } else {
-        const response = await apiService.signup({ email, password, displayName });
-        login(response.token, response.user);
-        toast.success('Account created successfully!');
-        navigate('/');
+        if (!password || !displayName) {
+          toast.error('Please fill in all fields.');
+          setLoading(false);
+          return;
+        }
+
+        const data = await apiService.signup(email, password, displayName);
+        
+        if (data.user) {
+          toast.success('Account created successfully!');
+          setUser(data.user); // This will trigger the useEffect
+        }
       }
     } catch (error: any) {
       console.error('Auth error:', error);
-      toast.error(error.message || 'Authentication failed');
+      let message = error.message || 'Authentication failed';
+      
+      if (message.toLowerCase().includes('rate limit')) {
+        message = 'Slow down! Too many attempts. Please wait a few minutes.';
+      } else if (message.toLowerCase().includes('invalid login credentials')) {
+        message = 'Invalid email or password.';
+      }
+      
+      toast.error(message, { duration: 6000 });
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    toast.info('Password reset is currently handled by admin. Please contact support.');
   };
 
   return (
@@ -69,14 +114,32 @@ export default function Login() {
             </div>
             <CardTitle className="text-2xl font-bold tracking-tight">Nexlify Student Portal</CardTitle>
             <CardDescription className="text-zinc-400">
-              {isLogin ? 'Sign in to access your dashboard' : 'Create an account to start learning'}
+              {isLogin 
+                ? 'Sign in to access your dashboard' 
+                : 'Create an account to start learning'}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6 p-6">
+            <div className="flex gap-2 p-1 bg-zinc-100 rounded-lg">
+              <button
+                onClick={() => setIsLogin(true)}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${isLogin ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => setIsLogin(false)}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${!isLogin ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Sign Up
+              </button>
+            </div>
+
             <form onSubmit={handleAuth} className="space-y-4">
               <AnimatePresence mode="wait">
                 {!isLogin && (
                   <motion.div
+                    key="name-field"
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
@@ -105,7 +168,7 @@ export default function Login() {
                   <Input 
                     id="email" 
                     type="email" 
-                    placeholder="name@company.com" 
+                    placeholder="name@example.com" 
                     className="pl-10"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -113,55 +176,89 @@ export default function Login() {
                   />
                 </div>
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
-                  {isLogin && (
-                    <button type="button" className="text-xs text-zinc-500 hover:text-zinc-900 font-medium">
-                      Forgot password?
+
+              {isLogin && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Password</Label>
+                    <button 
+                      type="button" 
+                      onClick={handleResetPassword}
+                      className="text-xs text-zinc-500 hover:text-zinc-900 font-medium"
+                    >
+                      Forgot?
                     </button>
-                  )}
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                    <Input 
+                      id="password" 
+                      type={showPassword ? "text" : "password"} 
+                      className="pl-10 pr-10"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required 
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-2.5 text-zinc-400 hover:text-zinc-600 transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
-                  <Input 
-                    id="password" 
-                    type={showPassword ? "text" : "password"} 
-                    className="pl-10 pr-10"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required 
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-zinc-400 hover:text-zinc-600 transition-colors"
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+              )}
+
+              {!isLogin && (
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                    <Input 
+                      id="password" 
+                      type={showPassword ? "text" : "password"} 
+                      className="pl-10 pr-10"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required 
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-2.5 text-zinc-400 hover:text-zinc-600 transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
+
               <Button type="submit" className="w-full h-11 font-bold" disabled={loading}>
                 {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 {isLogin ? 'Sign In' : 'Create Account'}
               </Button>
             </form>
-
-            <div className="text-center">
-              <button 
-                type="button"
-                onClick={() => setIsLogin(!isLogin)}
-                className="text-sm text-zinc-600 hover:text-zinc-900 font-medium underline underline-offset-4"
-              >
-                {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
-              </button>
-            </div>
           </CardContent>
           <CardFooter className="flex flex-col gap-4 bg-zinc-50 border-t border-zinc-100 p-6">
-            <p className="text-[10px] text-zinc-400 text-center leading-relaxed">
-              By continuing, you agree to Nexlify's Terms of Service. 
-              Access is restricted to authorized personnel.
-            </p>
+            <div className="w-full space-y-4">
+              <div className="text-center space-y-2">
+                <p className="text-xs text-zinc-500">Having trouble signing in?</p>
+                <div className="flex justify-center gap-4">
+                  <button 
+                    onClick={handleResetPassword}
+                    className="text-xs text-zinc-900 font-bold hover:underline"
+                  >
+                    Reset Password
+                  </button>
+                </div>
+              </div>
+              
+              <p className="text-[10px] text-zinc-400 text-center leading-relaxed">
+                By continuing, you agree to Nexlify's Terms of Service. 
+                Access is restricted to authorized personnel.
+              </p>
+            </div>
           </CardFooter>
         </Card>
       </motion.div>

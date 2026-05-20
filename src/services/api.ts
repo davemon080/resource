@@ -2,162 +2,148 @@ import { Module, UserProgress, ModuleType } from '@/types';
 
 export { ModuleType };
 export type { Module, UserProgress };
-
-const API_BASE = '/api';
-
-function getHeaders() {
-  const token = localStorage.getItem('auth_token');
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-  };
-}
+const API_URL = '/api';
 
 export const apiService = {
-  // Auth
-  async login(credentials: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials),
-    });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Login failed');
+  // Helper for calling the backend API directly
+  async callBackend(endpoint: string, options: RequestInit = {}) {
+    const token = localStorage.getItem('auth_token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    } as any;
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-    return res.json();
+
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = `${API_URL}${cleanEndpoint}`;
+    
+    // Server-side calls (SSR/Node) need absolute URL if used
+    const fetchUrl = typeof window === 'undefined' ? `http://localhost:3000${url}` : url;
+    
+    if (typeof window !== 'undefined') {
+      console.log(`[API] Fetching ${fetchUrl}`);
+    }
+    
+    // Add a 90-second timeout to fetch requests
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      console.warn(`[API] Timeout reached for ${fetchUrl} (90s)`);
+      controller.abort();
+    }, 90000);
+
+    try {
+      const response = await fetch(fetchUrl, {
+        ...options,
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(id);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+        }
+        throw new Error(errorData.error || 'API call failed');
+      }
+
+      return response.json();
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.error(`[API Timeout] Request to ${fetchUrl} timed out after 90s`);
+        throw new Error('The request is taking too long. The server might be warming up, please wait a moment.');
+      }
+      console.error(`[API Error] Request to ${fetchUrl} failed:`, err.message);
+      throw err;
+    }
   },
 
-  async signup(data: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/auth/signup`, {
+  // Auth
+  async login(email: string, password: string) {
+    const data = await this.callBackend('/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ email, password })
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Signup failed');
-    }
-    return res.json();
+    localStorage.setItem('auth_token', data.token);
+    return data;
+  },
+
+  async signup(email: string, password: string, displayName: string) {
+    const data = await this.callBackend('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, displayName })
+    });
+    localStorage.setItem('auth_token', data.token);
+    return data;
+  },
+
+  async logout() {
+    localStorage.removeItem('auth_token');
   },
 
   // Modules
   async getModules(): Promise<Module[]> {
-    const res = await fetch(`${API_BASE}/modules`, { headers: getHeaders() });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to fetch modules');
-    }
-    return res.json();
+    return this.callBackend('/modules');
   },
 
   async createModule(module: Partial<Module>): Promise<void> {
-    const res = await fetch(`${API_BASE}/modules`, {
+    await this.callBackend('/modules', {
       method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(module),
+      body: JSON.stringify(module)
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to create module');
-    }
   },
 
   async updateModule(id: string, module: Partial<Module>): Promise<void> {
-    const res = await fetch(`${API_BASE}/modules/${id}`, {
+    await this.callBackend(`/modules/${id}`, {
       method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(module),
+      body: JSON.stringify(module)
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to update module');
-    }
   },
 
   async deleteModule(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/modules/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders(),
+    await this.callBackend(`/modules/${id}`, {
+      method: 'DELETE'
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to delete module');
-    }
   },
 
   // Users
   async getUser(id: string): Promise<UserProgress> {
-    const res = await fetch(`${API_BASE}/users/${id}`, { headers: getHeaders() });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to fetch user');
-    }
-    return res.json();
-  },
-
-  async ensureUser(user: { id: string; email: string | null; displayName: string | null; photoUrl: string | null }): Promise<void> {
-    const res = await fetch(`${API_BASE}/users`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(user),
-    });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to ensure user');
-    }
+    return this.callBackend(`/users/${id}`);
   },
 
   async updateProgress(id: string, progress: Partial<UserProgress>): Promise<void> {
-    const res = await fetch(`${API_BASE}/users/${id}/progress`, {
+    await this.callBackend(`/users/${id}/progress`, {
       method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(progress),
+      body: JSON.stringify(progress)
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to update progress');
-    }
   },
 
   async updateProfile(id: string, profile: { displayName: string; photoUrl: string }): Promise<void> {
-    const res = await fetch(`${API_BASE}/users/${id}/profile`, {
+    await this.callBackend(`/users/${id}/profile`, {
       method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(profile),
+      body: JSON.stringify(profile)
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to update profile');
-    }
   },
 
   async updatePassword(id: string, password: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/users/${id}/password`, {
+    await this.callBackend(`/users/${id}/password`, {
       method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password })
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to update password');
-    }
   },
 
   async getAdminUsers(): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/admin/users`, { headers: getHeaders() });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || 'Failed to fetch users');
-    }
-    return res.json();
+    return this.callBackend('/admin/users');
   },
 
   // Admin
   async checkAdmin(email: string): Promise<boolean> {
-    const res = await fetch(`${API_BASE}/admins/${email}`, { headers: getHeaders() });
-    if (!res.ok) return false;
-    const data = await res.json();
+    const data = await this.callBackend(`/admins/${email}`);
     return data.isAdmin;
   }
 };

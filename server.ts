@@ -4,57 +4,163 @@ import path from 'path';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'node:crypto';
+import compression from 'compression';
 import { createServer as createViteServer } from 'vite';
-import { initDb, query } from './src/lib/db';
+import { initDb, query, getPool } from './src/lib/db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const API_SECRET = process.env.API_SECRET;
 
 const app = express();
 export { app };
 
-app.use(cors());
+app.use(compression());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
+}));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Middleware to ensure DB is initialized
-app.use(async (req, res, next) => {
+// Request Logger with performance monitoring
+app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
-    try {
-      await initDb();
-      next();
-    } catch (err: any) {
-      console.error('DB Initialization middleware failed:', err.message);
-      res.status(500).json({ error: 'Database initialization failed', details: err.message });
-    }
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (duration > 2000) {
+        console.warn(`[SLOW API] ${req.method} ${req.path} took ${duration}ms`);
+      } else {
+        console.log(`${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+      }
+    });
+  }
+  next();
+});
+
+// Authorization Middleware for Master Secret
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  const apiKey = req.headers['x-api-key'];
+  
+  if (API_SECRET && (authHeader === `Bearer ${API_SECRET}` || apiKey === API_SECRET)) {
+    (req as any).isMaster = true;
+    return next();
+  }
+  
+  // For normal requests, continue to individual route handlers which will check JWT if needed
+  next();
+};
+
+app.use(authMiddleware);
+
+// DB Initialization
+(async () => {
+  try {
+    await initDb();
+    console.log('Database initialized successfully on startup.');
+  } catch (err: any) {
+    console.error('Failed to initialize database on startup:', err.message);
+  }
+})();
+
+// Middleware to ensure DB is initialized (acts as a safety and wait mechanism)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    initDb()
+      .then(() => next())
+      .catch((err: any) => {
+        console.error('DB Initialization check failed:', err.message);
+        res.status(503).json({ error: 'Database is still initializing or failed to connect', details: err.message });
+      });
   } else {
     next();
+  }
+});
+
+// Generic Query API (One API Link for Master Secret)
+app.post('/api/query', async (req, res) => {
+  if (!(req as any).isMaster) {
+    return res.status(403).json({ error: 'Forbidden: Master API Secret required' });
+  }
+
+  const { sql, params } = req.body;
+  if (!sql) {
+    return res.status(400).json({ error: 'SQL query is required' });
+  }
+
+  try {
+    const result = await query(sql, params || []);
+    res.json({
+      rowCount: result.rowCount,
+      rows: result.rows,
+      command: result.command
+    });
+  } catch (err: any) {
+    console.error('Master query failed:', err.message);
+    res.status(500).json({ error: 'Query execution failed', details: err.message });
+  }
+});
+
+// AI Proxy API
+app.post('/api/ai', async (req, res) => {
+  if (!(req as any).isMaster) {
+    return res.status(403).json({ error: 'Forbidden: Master API Secret required' });
+  }
+
+  const { prompt, model = 'gemini-2.0-flash' } = req.body;
+  if (!prompt) {
+    return res.status(400).json({ error: 'Prompt is required' });
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'Gemini API key is not configured on server' });
+  }
+
+  try {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY!,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+    });
+
+    res.json({ text: response.text });
+  } catch (err: any) {
+    console.error('AI Proxy failed:', err.message);
+    res.status(500).json({ error: 'AI generation failed', details: err.message });
   }
 });
 
 // Health Check API
 app.get('/api/health', async (req, res) => {
   try {
-    const result = await query('SELECT NOW()');
+    const pool = getPool();
+    const result = await pool.query('SELECT NOW()');
     res.json({ 
       status: 'ok', 
       database: 'connected', 
-      time: result.rows[0].now,
-      env: {
-        hasDatabaseUrl: !!process.env.DATABASE_URL,
-        hasPostgresUrl: !!process.env.POSTGRES_URL,
-        nodeEnv: process.env.NODE_ENV
-      }
+      time: result.rows[0].now
     });
   } catch (err: any) {
+    console.error('Health check failed:', err.message);
     res.status(500).json({ 
       status: 'error', 
       database: 'disconnected', 
       error: err.message,
-      env: {
-        hasDatabaseUrl: !!process.env.DATABASE_URL,
-        hasPostgresUrl: !!process.env.POSTGRES_URL,
-        nodeEnv: process.env.NODE_ENV
-      }
+      suggestion: err.message.includes('authentication failed') || err.message.includes('DATABASE_URL')
+        ? 'Check your DATABASE_URL in AI Studio Settings' 
+        : 'Ensure your database is active'
     });
   }
 });
@@ -92,9 +198,19 @@ async function startServer() {
 app.post('/api/auth/signup', async (req, res, next) => {
     let { email, password, displayName } = req.body;
     try {
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
       email = email.toLowerCase().trim();
+      
+      // Check if user already exists
+      const existing = await query('SELECT id FROM users WHERE email = $1', [email]);
+      if (existing.rows.length > 0) {
+        return res.status(400).json({ error: 'User with this email already exists' });
+      }
+
       const hashedPassword = await bcrypt.hash(password, 10);
-      const id = Math.random().toString(36).substring(2, 15);
+      const id = randomUUID();
       
       await query(
         'INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)',
@@ -107,13 +223,46 @@ app.post('/api/auth/signup', async (req, res, next) => {
         user: { id, email, displayName } 
       });
     } catch (err: any) {
+      console.error('Signup error:', err);
       next(err);
     }
-  });
+});
 
-  app.post('/api/auth/login', async (req, res, next) => {
+app.get('/api/auth/me', async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string };
+    const result = await query('SELECT * FROM users WHERE id = $1', [decoded.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    res.json({ 
+      id: user.id, 
+      email: user.email, 
+      displayName: user.display_name,
+      photoUrl: user.photo_url,
+      unlockedModuleIndex: user.unlocked_module_index,
+      completed: user.completed
+    });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res, next) => {
     let { email, password } = req.body;
     try {
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
       email = email.toLowerCase().trim();
       console.log(`Login attempt for: ${email}`);
       const result = await query('SELECT * FROM users WHERE email = $1', [email]);
@@ -124,6 +273,11 @@ app.post('/api/auth/signup', async (req, res, next) => {
       }
       
       const user = result.rows[0];
+      if (!user.password_hash) {
+        console.error(`Login failed: User ${email} has no password_hash`);
+        return res.status(500).json({ error: 'User account is improperly configured' });
+      }
+
       const validPassword = await bcrypt.compare(password, user.password_hash);
       
       if (!validPassword) {
@@ -149,7 +303,17 @@ app.post('/api/auth/signup', async (req, res, next) => {
   });
 
   // Modules API
+  let modulesCache: any[] | null = null;
+  let lastCacheTime = 0;
+  const CACHE_TTL = 30000; // 30 seconds
+
   app.get('/api/modules', async (req, res) => {
+    const now = Date.now();
+    if (modulesCache && (now - lastCacheTime < CACHE_TTL)) {
+      return res.json(modulesCache);
+    }
+
+    console.log('[API] GET /api/modules requested (Cache Miss)');
     try {
       const result = await query('SELECT * FROM modules ORDER BY order_index ASC');
       // Map Snake Case to Camel Case for frontend compatibility
@@ -164,12 +328,23 @@ app.post('/api/auth/signup', async (req, res, next) => {
         order: row.order_index,
         duration: row.duration
       }));
+      
+      if (modules.length > 0) {
+        modulesCache = modules;
+        lastCacheTime = now;
+      }
+      
       res.json(modules);
     } catch (err: any) {
       console.error('Failed to fetch modules:', err.message);
       res.status(500).json({ error: 'Failed to fetch modules', details: err.message });
     }
   });
+
+  const invalidateCache = () => {
+    modulesCache = null;
+    lastCacheTime = 0;
+  };
 
   app.post('/api/modules', async (req, res) => {
     const { id, title, description, type, videoUrl, pdfUrl, thumbnailUrl, order } = req.body;
@@ -178,6 +353,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
         'INSERT INTO modules (id, title, description, type, video_url, pdf_url, thumbnail_url, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING',
         [id, title, description, type, videoUrl, pdfUrl, thumbnailUrl, order]
       );
+      invalidateCache();
       res.status(201).json({ message: 'Module created' });
     } catch (err: any) {
       console.error('Failed to create module:', err.message);
@@ -193,6 +369,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
         'UPDATE modules SET title = $1, description = $2, type = $3, video_url = $4, pdf_url = $5, thumbnail_url = $6, order_index = $7 WHERE id = $8',
         [title, description, type, videoUrl, pdfUrl, thumbnailUrl, order, id]
       );
+      invalidateCache();
       res.json({ message: 'Module updated' });
     } catch (err: any) {
       console.error('Failed to update module:', err.message);
@@ -204,6 +381,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
     const { id } = req.params;
     try {
       await query('DELETE FROM modules WHERE id = $1', [id]);
+      invalidateCache();
       res.json({ message: 'Module deleted' });
     } catch (err: any) {
       console.error('Failed to delete module:', err.message);
@@ -309,7 +487,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
         id: row.id,
         email: row.email,
         displayName: row.display_name,
-        photoURL: row.photo_url,
+        photoUrl: row.photo_url,
         unlockedModuleIndex: row.unlocked_module_index,
         completed: row.completed,
         completedAt: row.completed_at
@@ -350,11 +528,15 @@ async function setupVite() {
 
 const PORT = 3000;
 if (!process.env.VERCEL) {
-  setupVite().then(() => {
-    startServer().then(() => {
+  setupVite()
+    .then(() => startServer())
+    .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`Server running on port ${PORT}`);
       });
+    })
+    .catch(err => {
+      console.error('Critical: Failed to start server:', err);
+      process.exit(1);
     });
-  });
 }

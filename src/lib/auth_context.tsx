@@ -1,19 +1,13 @@
 import { useState, useEffect, createContext, useContext } from 'react';
-
-export interface User {
-  id: string;
-  email: string;
-  displayName?: string;
-  photoUrl?: string;
-  unlockedModuleIndex?: number;
-  completed?: boolean;
-}
+import { apiService } from '@/services/api';
+import { User } from '@/types';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (token: string, user: User) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+  setUser: (user: User | null) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -22,34 +16,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const savedUser = localStorage.getItem('auth_user');
+  const refreshUser = async () => {
     const token = localStorage.getItem('auth_token');
-    if (savedUser && token) {
-      try {
-        setUser(JSON.parse(savedUser));
-      } catch (e) {
-        localStorage.removeItem('auth_user');
+    if (!token) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      const userData = await apiService.callBackend('/auth/me');
+      setUser(userData);
+    } catch (err) {
+      console.error('Failed to refresh user:', err);
+      // Only clear user if it's an auth error, not a network/server error
+      if ((err as Error).message.includes('Unauthorized') || (err as Error).message.includes('token')) {
+        setUser(null);
         localStorage.removeItem('auth_token');
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, []);
-
-  const login = (token: string, userData: User) => {
-    localStorage.setItem('auth_token', token);
-    localStorage.setItem('auth_user', JSON.stringify(userData));
-    setUser(userData);
   };
 
-  const logout = () => {
+  useEffect(() => {
+    refreshUser();
+  }, []);
+
+  const logout = async () => {
     localStorage.removeItem('auth_token');
-    localStorage.removeItem('auth_user');
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, logout, refreshUser, setUser }}>
       {children}
     </AuthContext.Provider>
   );

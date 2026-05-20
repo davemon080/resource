@@ -15,6 +15,15 @@ export interface Module {
   duration?: number;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  displayName?: string;
+  photoUrl?: string;
+  unlockedModuleIndex?: number;
+  completed?: boolean;
+}
+
 export interface UserProgress {
   id: string;
   email: string;

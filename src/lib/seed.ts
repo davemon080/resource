@@ -2,7 +2,7 @@ import { apiService, ModuleType, Module } from '@/services/api';
 
 const INITIAL_MODULES: Partial<Module>[] = [
   {
-    id: 'intro-101',
+    id: '11111111-1111-1111-1111-111111111111',
     title: 'Introduction to Full Stack Development',
     description: 'An overview of the modern web development ecosystem and what you will learn in this program.',
     type: ModuleType.VIDEO,
@@ -12,7 +12,7 @@ const INITIAL_MODULES: Partial<Module>[] = [
     duration: 60,
   },
   {
-    id: 'cloud-202',
+    id: '22222222-2222-2222-2222-222222222222',
     title: 'Cloud Architecture Basics',
     description: 'Learn the fundamentals of cloud infrastructure and how to deploy your first application.',
     type: ModuleType.VIDEO,
@@ -22,7 +22,7 @@ const INITIAL_MODULES: Partial<Module>[] = [
     duration: 120,
   },
   {
-    id: 'db-303',
+    id: '33333333-3333-3333-3333-333333333333',
     title: 'Mastering Database Design',
     description: 'Understand relational and NoSQL databases, and how to choose the right one for your needs.',
     type: ModuleType.VIDEO,
@@ -32,7 +32,7 @@ const INITIAL_MODULES: Partial<Module>[] = [
     duration: 90,
   },
   {
-    id: 'pdf-404',
+    id: '44444444-4444-4444-4444-444444444444',
     title: 'Curriculum PDF Guide',
     description: 'Download the full course syllabus and resource guide.',
     type: ModuleType.PDF,
@@ -48,11 +48,15 @@ export async function seedModules() {
   if (isSeeding) return;
   try {
     isSeeding = true;
-    const existing = await apiService.getModules();
+    const existing = await apiService.getModules().catch(() => []);
     if (existing.length === 0) {
       console.log('Seeding modules to PostgreSQL...');
       for (const module of INITIAL_MODULES) {
-        await apiService.createModule(module);
+        try {
+          await apiService.createModule(module);
+        } catch (e) {
+          console.warn(`Failed to seed module ${module.id}:`, e);
+        }
       }
       console.log('Seeding complete.');
     }

@@ -4,7 +4,7 @@ import { useAuth } from '@/lib/auth_context';
 import { apiService } from '@/services/api';
 import { Loader2 } from 'lucide-react';
 
-const ADMIN_EMAIL = 'davemon080@gmail.com';
+const ADMIN_EMAILS = ['davemon080@gmail.com', 'daveimagodei@gmail.com', 'simonodavido@gmail.com'];
 
 export default function AdminGuard() {
   const { user, loading: authLoading } = useAuth();
@@ -21,8 +21,8 @@ export default function AdminGuard() {
         return;
       }
 
-      // Check for hardcoded email first
-      if (user.email === ADMIN_EMAIL) {
+      // Check for hardcoded emails first
+      if (ADMIN_EMAILS.includes(user.email)) {
         setIsAdmin(true);
         setLoading(false);
         return;

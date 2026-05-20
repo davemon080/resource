@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 
 export default function Profile() {
-  const { user, login } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [photoUrl, setPhotoUrl] = useState(user?.photoUrl || '');
   const [newPassword, setNewPassword] = useState('');
@@ -80,9 +80,7 @@ export default function Profile() {
       });
 
       // Update local state in context
-      const updatedUser = { ...user, displayName, photoUrl };
-      const token = localStorage.getItem('auth_token') || '';
-      login(token, updatedUser);
+      await refreshUser();
 
       toast.success('Profile updated successfully!');
     } catch (error: any) {

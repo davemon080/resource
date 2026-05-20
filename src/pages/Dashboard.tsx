@@ -49,7 +49,7 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    seedModules();
+    // Redundant seeding removed as it's handled on the server
   }, []);
 
   if (loading) {
